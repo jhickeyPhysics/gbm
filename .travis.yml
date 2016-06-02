@@ -6,8 +6,8 @@ os:
   - linux
   - osx
 
-r_github_packages:
-  - jimhester/covr
+install:
+  - ./travis-tool.sh github_package jimhester/covr
 
 after_success:
-  - echo 'covr::coveralls()'
+  - Rscript -e 'covr::coveralls()'
