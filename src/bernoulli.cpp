@@ -16,37 +16,30 @@
 //----------------------------------------
 // Function Members - Private
 //----------------------------------------
-CBernoulli::CBernoulli()
-    : terminalnode_capped_(false), terminalnode_cap_level_(10) {}
+CBernoulli::CBernoulli(const parallel_details& parallel)
+    : CDistribution(parallel),
+      terminalnode_capped_(false),
+      terminalnode_cap_level_(10) {}
 
 //----------------------------------------
 // Function Members - Public
 //----------------------------------------
 CDistribution* CBernoulli::Create(DataDistParams& distparams) {
-  return new CBernoulli();
+  return new CBernoulli(distparams.parallel);
 }
 
 CBernoulli::~CBernoulli() {}
 
-void CBernoulli::ComputeWorkingResponse(const CDataset& kData,
+void CBernoulli::ComputeWorkingResponse(const CDataset& kData, const Bag& kBag,
                                         const double* kFuncEstimate,
-                                        double* residuals) {
-  double prob = 0.0;
-  double deltafunc_est = 0.0;
-
+                                        std::vector<double>& residuals) {
+#pragma omp parallel for schedule(static, get_array_chunk_size()) \
+  num_threads(get_num_threads())
   for (unsigned long i = 0; i < kData.get_trainsize(); i++) {
-    deltafunc_est = kFuncEstimate[i] + kData.offset_ptr()[i];
-    prob = 1.0 / (1.0 + std::exp(-deltafunc_est));
+    const double deltafunc_est = kFuncEstimate[i] + kData.offset_ptr()[i];
+    const double prob = 1.0 / (1.0 + std::exp(-deltafunc_est));
 
     residuals[i] = kData.y_ptr()[i] - prob;
-#ifdef NOISY_DEBUG
-    //  Rprintf("dF=%f, dProb=%f, adZ=%f, data.y_ptr()=%f\n", dF, prob, adZ[i],
-    //  data.y_ptr()[i]);
-    if (dProb < 0.0001)
-      Rprintf("Small prob(i=%d)=%f Z=%f\n", i, prob, residuals[i]);
-    if (dProb > 1 - 0.0001)
-      Rprintf("Large prob(i=%d)=%f Z=%f\n", i, prob, residuals[i]);
-#endif
   }
 }
 
@@ -68,6 +61,7 @@ double CBernoulli::InitF(const CDataset& kData) {
       numerator += kData.weight_ptr()[i] * (kData.y_ptr()[i] - dTemp);
       denominator += kData.weight_ptr()[i] * dTemp * (1.0 - dTemp);
     }
+
     newtonstep = numerator / denominator;
     initfunc_est += newtonstep;
   }
@@ -75,18 +69,18 @@ double CBernoulli::InitF(const CDataset& kData) {
   return initfunc_est;
 }
 
-double CBernoulli::Deviance(const CDataset& kData,
+double CBernoulli::Deviance(const CDataset& kData, const Bag& kBag,
                             const double* kFuncEstimate) {
-  unsigned long i = 0;
   double loss = 0.0;
-  double deltafunc_est = 0.0;
   double weight = 0.0;
 
   // Switch to validation set if necessary
   unsigned long num_of_rows_in_set = kData.get_size_of_set();
 
-  for (i = 0; i != num_of_rows_in_set; i++) {
-    deltafunc_est = kFuncEstimate[i] + kData.offset_ptr()[i];
+#pragma omp parallel for schedule(static, get_array_chunk_size()) \
+    reduction(+ : loss, weight) num_threads(get_num_threads())
+  for (unsigned long i = 0; i < num_of_rows_in_set; i++) {
+    const double deltafunc_est = kFuncEstimate[i] + kData.offset_ptr()[i];
     loss += kData.weight_ptr()[i] * (kData.y_ptr()[i] * deltafunc_est -
                                      std::log(1.0 + std::exp(deltafunc_est)));
     weight += kData.weight_ptr()[i];
@@ -102,36 +96,29 @@ double CBernoulli::Deviance(const CDataset& kData,
   return -2 * loss / weight;
 }
 
-void CBernoulli::FitBestConstant(const CDataset& kData,
+void CBernoulli::FitBestConstant(const CDataset& kData, const Bag& kBag,
                                  const double* kFuncEstimate,
                                  unsigned long num_terminalnodes,
-                                 double* residuals, CCARTTree& tree) {
+                                 std::vector<double>& residuals,
+                                 CCARTTree& tree) {
   unsigned long obs_num = 0;
   unsigned long node_num = 0;
   vector<double> numerator_vec(num_terminalnodes, 0.0);
   vector<double> denom_vec(num_terminalnodes, 0.0);
 
   for (obs_num = 0; obs_num < kData.get_trainsize(); obs_num++) {
-    if (kData.get_bag_element(obs_num)) {
+    if (kBag.get_element(obs_num)) {
       numerator_vec[tree.get_node_assignments()[obs_num]] +=
           kData.weight_ptr()[obs_num] * residuals[obs_num];
       denom_vec[tree.get_node_assignments()[obs_num]] +=
           kData.weight_ptr()[obs_num] *
           (kData.y_ptr()[obs_num] - residuals[obs_num]) *
           (1 - kData.y_ptr()[obs_num] + residuals[obs_num]);
-#ifdef NOISY_DEBUG
-/*
-      Rprintf("iNode=%d, dNum(%d)=%f, dDen(%d)=%f\n",
-              aiNodeAssign[iObs],
-              iObs,vecdNum[aiNodeAssign[iObs]],
-              iObs,vecdDen[aiNodeAssign[iObs]]);
-*/
-#endif
     }
   }
 
   for (node_num = 0; node_num < num_terminalnodes; node_num++) {
-    if (tree.get_terminal_nodes()[node_num] != NULL) {
+    if (tree.has_node(node_num)) {
       if (denom_vec[node_num] == 0) {
         tree.get_terminal_nodes()[node_num]->set_prediction(0.0);
       } else {
@@ -160,18 +147,18 @@ void CBernoulli::FitBestConstant(const CDataset& kData,
   }
 }
 
-double CBernoulli::BagImprovement(const CDataset& kData,
+double CBernoulli::BagImprovement(const CDataset& kData, const Bag& kBag,
                                   const double* kFuncEstimate,
                                   const double kShrinkage,
-                                  const double* kDeltaEstimate) {
+                                  const std::vector<double>& kDeltaEstimate) {
   double returnvalue = 0.0;
-  double deltafunc_est = 0.0;
   double weight = 0.0;
-  unsigned long i = 0;
 
-  for (i = 0; i < kData.get_trainsize(); i++) {
-    if (!kData.get_bag_element(i)) {
-      deltafunc_est = kFuncEstimate[i] + kData.offset_ptr()[i];
+#pragma omp parallel for schedule(static, get_array_chunk_size()) \
+    reduction(+ : returnvalue, weight) num_threads(get_num_threads())
+  for (unsigned long i = 0; i < kData.get_trainsize(); i++) {
+    if (!kBag.get_element(i)) {
+      const double deltafunc_est = kFuncEstimate[i] + kData.offset_ptr()[i];
 
       if (kData.y_ptr()[i] == 1.0) {
         returnvalue += kData.weight_ptr()[i] * kShrinkage * kDeltaEstimate[i];

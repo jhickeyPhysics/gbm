@@ -18,15 +18,18 @@
 //------------------------------
 // Includes
 //------------------------------
-#include "config_structs.h"
-#include "gbmexcept.h"
+#include "datadistparams.h"
+#include "gbm_exception.h"
 #include "gbm_functions.h"
 #include <algorithm>
 #include <memory>
 #include <vector>
 #include <Rcpp.h>
 
-typedef std::vector<int> Bag;
+//------------------------------
+// Type Defs
+//------------------------------
+typedef std::vector<int> index_vector;
 
 //------------------------------
 // Class definition
@@ -57,6 +60,14 @@ class CDataset {
     return yptrs_[colIndex];
   };  // const overloaded version
 
+  int* yint_ptr(long colIndex = 0) {
+    return yintptrs_[colIndex];
+  };  // get iterator to class labels
+
+  const int* yint_ptr(long colIndex = 0) const {
+    return yintptrs_[colIndex];
+  };  // const overloaded version
+
   const double* offset_ptr() const { return offset_ptr_; };
 
   const double* weight_ptr() const {
@@ -84,6 +95,9 @@ class CDataset {
       for (unsigned int i = 0; i < yptrs_.size(); i++) {
         yptrs_[i] = shift_ptr_to_validation(yptrs_[i]);
       }
+      for (unsigned int i = 0; i < yintptrs_.size(); i++) {
+        yintptrs_[i] = shift_ptr_to_validation(yintptrs_[i]);
+      }
       offset_ptr_ = shift_ptr_to_validation(offset_ptr_);
       weights_ptr_ = shift_ptr_to_validation(weights_ptr_);
       point_at_trainingset_ = false;
@@ -97,6 +111,9 @@ class CDataset {
       for (unsigned int i = 0; i < yptrs_.size(); i++) {
         yptrs_[i] = shift_ptr_to_train(yptrs_[i]);
       }
+      for (unsigned int i = 0; i < yintptrs_.size(); i++) {
+        yintptrs_[i] = shift_ptr_to_train(yintptrs_[i]);
+      }
       offset_ptr_ = shift_ptr_to_train(offset_ptr_);
       weights_ptr_ = shift_ptr_to_train(weights_ptr_);
       point_at_trainingset_ = true;
@@ -105,26 +122,18 @@ class CDataset {
     }
   };
 
-  typedef std::vector<int> index_vector;
   index_vector RandomOrder() const;  // randomize order of predictor varaiables
-
-  double get_bagfraction() const { return bagfraction_; };
   unsigned long get_validsize() const { return num_validationdata_; };
   unsigned long get_size_of_set() const {
     if (point_at_trainingset_) return get_trainsize();
     return get_validsize();
   }
-  unsigned long get_total_in_bag() const { return totalinbag_; };
   unsigned long get_num_observations_in_training() const {
     return num_trainobservations_;
   }
   int get_row_observation_id(int row_number) const {
     return observation_ids_(row_number);
   }
-
-  bool get_bag_element(long index) const { return databag_[index]; }
-  void set_bag_element(long index) { databag_[index] = 1; };
-  void clear_bag() { databag_.assign(get_trainsize(), 0); };
 
  private:
   //-------------------
@@ -133,6 +142,9 @@ class CDataset {
   void set_up_yptrs() {
     for (long i = 0; i < response_.ncol(); i++) {
       yptrs_.push_back(response_(Rcpp::_, i).begin());
+    }
+    for (long i = 0; i < intResponse_.ncol(); i++) {
+      yintptrs_.push_back(intResponse_(Rcpp::_, i).begin());
     }
   }
 
@@ -159,12 +171,14 @@ class CDataset {
 
   // Numeric vectors storing data
   Rcpp::NumericMatrix xmatrix_, response_;
+  Rcpp::IntegerMatrix intResponse_;
   Rcpp::NumericVector response_offset_, data_weights_;
   Rcpp::IntegerVector num_variable_classes_, variable_monotonicity_,
       order_xvals_, observation_ids_;
 
   // Ptrs to numeric vectors - these must be mutable
   std::vector<double*> yptrs_;
+  std::vector<int*> yintptrs_;
   double* offset_ptr_;
   double* weights_ptr_;
 
@@ -174,10 +188,5 @@ class CDataset {
   unsigned long num_validationdata_;
   unsigned long num_features_;
   bool point_at_trainingset_;
-
-  // Bagged  data
-  Bag databag_;
-  double bagfraction_;
-  unsigned long totalinbag_;
 };
 #endif  // DATASET_H

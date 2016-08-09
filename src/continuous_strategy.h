@@ -26,12 +26,12 @@ class ContinuousStrategy : public GenericNodeStrategy {
   //----------------------
   // Public Constructors
   //----------------------
-  ContinuousStrategy(CNode* node) : node_context_(node){};
+  ContinuousStrategy(CNode* node) : node_context_(node) { is_split_ = true; };
 
   //---------------------
   // Public destructor
   //---------------------
-  ~ContinuousStrategy() { node_context_ = NULL; };
+  ~ContinuousStrategy() {};
 
   //---------------------
   // Public Functions
@@ -40,7 +40,7 @@ class ContinuousStrategy : public GenericNodeStrategy {
     node_context_->left_child()->Adjust(min_num_node_obs);
     node_context_->right_child()->Adjust(min_num_node_obs);
 
-    if ((node_context_->missing_child()->get_splittype() == kNone) &&
+    if ((node_context_->missing_child()->is_terminal()) &&
         (node_context_->missing_child()->get_numobs() < min_num_node_obs)) {
       node_context_->set_prediction(
           ((node_context_->left_child()->get_totalweight()) *
@@ -49,7 +49,8 @@ class ContinuousStrategy : public GenericNodeStrategy {
                (node_context_->right_child()->get_prediction())) /
           (node_context_->left_child()->get_totalweight() +
            node_context_->right_child()->get_totalweight()));
-      node_context_->missing_child()->set_prediction(node_context_->get_prediction());
+      node_context_->missing_child()->set_prediction(
+          node_context_->get_prediction());
     } else {
       node_context_->missing_child()->Adjust(min_num_node_obs);
       node_context_->set_prediction(
@@ -76,7 +77,8 @@ class ContinuousStrategy : public GenericNodeStrategy {
     }
   }
   void GetVarRelativeInfluence(double* relative_influence) {
-    relative_influence[node_context_->get_split_var()] += node_context_->get_improvement();
+    relative_influence[node_context_->get_split_var()] +=
+        node_context_->get_improvement();
     node_context_->left_child()->GetVarRelativeInfluence(relative_influence);
     node_context_->right_child()->GetVarRelativeInfluence(relative_influence);
   }
@@ -87,9 +89,9 @@ class ContinuousStrategy : public GenericNodeStrategy {
     Rprintf("N=%f, Improvement=%f, Prediction=%f, NA pred=%f\n",
             node_context_->get_totalweight(), node_context_->get_improvement(),
             node_context_->get_prediction(),
-            (node_context_->missing_child() == NULL
-                 ? 0.0
-                 : node_context_->missing_child()->get_prediction()));
+            ((!(node_context_->missing_child()))
+	     ? 0.0
+	     : node_context_->missing_child()->get_prediction()));
 
     for (unsigned long i = 0; i < indent; i++) Rprintf("  ");
     Rprintf("V%d in ", node_context_->get_split_var());

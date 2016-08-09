@@ -2,8 +2,13 @@ language: r
 cache: packages
 sudo: false
 
+os:
+  - linux
+  - osx
+
 r_github_packages:
   - jimhester/covr
 
 after_success:
-  - Rscript -e 'covr::coveralls()' | R --vanilla
+  - Rscript -e 'covr::codecov()'
+  - bash <(curl -s https://codecov.io/bash)

@@ -20,13 +20,16 @@
 //------------------------------
 // Includes
 //------------------------------
-#include <cstdio>
-#include <cfloat>
-#include <algorithm>
-#include <vector>
+#include "databag.h"
 #include "dataset.h"
 #include "node_search.h"
+#include "parallel_details.h"
+#include "treeparams.h"
+#include <algorithm>
 #include <ctime>
+#include <cstdio>
+#include <cfloat>
+#include <vector>
 
 //------------------------------
 // Class definition
@@ -36,23 +39,22 @@ class CCARTTree {
   //----------------------
   // Public Constructors
   //----------------------
-  CCARTTree(TreeParams treeconfig);
+  CCARTTree(const TreeParams& treeconfig);
 
   //---------------------
   // Public destructor
   //---------------------
-  ~CCARTTree();
+  ~CCARTTree(){};
 
   //---------------------
   // Public Functions
   //---------------------
-  void Grow(double* residuals, const CDataset& kData,
-            const double* kFuncEstimate);
-  void Reset();
+  void Grow(const std::vector<double>& residuals, const CDataset& kData,
+            const Bag& kBag, const std::vector<double>& kDeltaEstimate);
 
   void PredictValid(const CDataset& kData, unsigned long num_validation_points,
-                    double* delta_estimates);
-  void Adjust(double* delta_estimates);
+                    std::vector<double>& delta_estimates);
+  void Adjust(std::vector<double>& delta_estimates);
 
   void TransferTreeToRList(const CDataset& kData, int* splitvar,
                            double* splitvalues, int* leftnodes, int* rightnodes,
@@ -66,28 +68,33 @@ class CCARTTree {
     return data_node_assignment_;
   }
   vector<CNode*>& get_terminal_nodes() { return terminalnode_ptrs_; }
+  bool has_node(unsigned long node_num) const {
+    return terminalnode_ptrs_[node_num];
+  }
   const double& get_shrinkage_factor() const { return kShrinkage_; }
   const unsigned long& min_num_obs_required() const {
     return min_num_node_obs_;
   }
   const unsigned long& size_of_tree() const { return totalnodecount_; }
-  CNode* get_rootnode() { return rootnode_; }
-  const CNode* get_rootnode() const { return rootnode_; }
 
+  int get_num_threads() const { return parallel_.get_num_threads(); }
+  int get_array_chunk_size() const { return parallel_.get_array_chunk_size(); }
+  
  private:
   //---------------------
   // Private Variables
   //---------------------
-  CNode* rootnode_;
-  vector<CNode*> terminalnode_ptrs_;
-  vector<unsigned long> data_node_assignment_;
-  CNodeSearch new_node_searcher_;
-
   unsigned long min_num_node_obs_;
   const long kTreeDepth_;
   const double kShrinkage_;
   double error_;  // total squared error before carrying out the splits
   unsigned long totalnodecount_;
+
+  auto_ptr<CNode> rootnode_;
+  vector<CNode*> terminalnode_ptrs_;
+  vector<unsigned long> data_node_assignment_;
+
+  parallel_details parallel_;
 };
 
 #endif  // TREE_H

@@ -14,28 +14,33 @@
 //----------------------------------------
 // Function Members - Private
 //----------------------------------------
-CQuantile::CQuantile(double alpha) : mplocm_("Other") { alpha_ = alpha; }
+CQuantile::CQuantile(double alpha, const parallel_details& parallel)
+    : CDistribution(parallel), mplocm_("Other") {
+  alpha_ = alpha;
+}
 
 //----------------------------------------
 // Function Members - Public
 //----------------------------------------
 CDistribution* CQuantile::Create(DataDistParams& distparams) {
   // Check that misc exists
-  double alpha = Rcpp::as<double>(distparams.misc[0]);
+  Rcpp::List misc_list = Rcpp::as<Rcpp::List>(distparams.misc);
+  double alpha = Rcpp::as<double>(misc_list[0]);
   if (!gbm_functions::has_value(alpha)) {
     throw gbm_exception::Failure(
         "Quantile dist requires misc to initialization.");
   }
-  return new CQuantile(alpha);
+  return new CQuantile(alpha, distparams.parallel);
 }
 
 CQuantile::~CQuantile() {}
 
-void CQuantile::ComputeWorkingResponse(const CDataset& kData,
+void CQuantile::ComputeWorkingResponse(const CDataset& kData, const Bag& kBag,
                                        const double* kFuncEstimate,
-                                       double* residuals) {
-  unsigned long i = 0;
-  for (i = 0; i < kData.get_trainsize(); i++) {
+                                       std::vector<double>& residuals) {
+#pragma omp parallel for schedule(static, get_array_chunk_size()) \
+  num_threads(get_num_threads())
+  for (unsigned long i = 0; i < kData.get_trainsize(); i++) {
     residuals[i] = (kData.y_ptr()[i] > kFuncEstimate[i] + kData.offset_ptr()[i])
                        ? alpha_
                        : -(1.0 - alpha_);
@@ -43,26 +48,28 @@ void CQuantile::ComputeWorkingResponse(const CDataset& kData,
 }
 
 double CQuantile::InitF(const CDataset& kData) {
-  double offset = 0.0;
   vecd_.resize(kData.get_trainsize());
+#pragma omp parallel for schedule(static, get_array_chunk_size()) \
+  num_threads(get_num_threads())
   for (unsigned long i = 0; i < kData.get_trainsize(); i++) {
-    offset = kData.offset_ptr()[i];
-    vecd_[i] = kData.y_ptr()[i] - offset;
+    vecd_[i] = kData.y_ptr()[i] - kData.offset_ptr()[i];
   }
 
   return mplocm_.WeightedQuantile(kData.get_trainsize(), &vecd_[0],
                                   kData.weight_ptr(), alpha_);
 }
 
-double CQuantile::Deviance(const CDataset& kData, const double* kFuncEstimate) {
-  unsigned long i = 0;
+double CQuantile::Deviance(const CDataset& kData, const Bag& kBag,
+                           const double* kFuncEstimate) {
   double loss = 0.0;
   double weight = 0.0;
 
   // Switch to validation set if necessary
   unsigned long num_rows_in_set = kData.get_size_of_set();
 
-  for (i = 0; i < num_rows_in_set; i++) {
+#pragma omp parallel for schedule(static, get_array_chunk_size()) \
+    reduction(+ : loss, weight) num_threads(get_num_threads())
+  for (unsigned long i = 0; i < num_rows_in_set; i++) {
     if (kData.y_ptr()[i] > kFuncEstimate[i] + kData.offset_ptr()[i]) {
       loss += kData.weight_ptr()[i] * alpha_ *
               (kData.y_ptr()[i] - kFuncEstimate[i] - kData.offset_ptr()[i]);
@@ -82,14 +89,14 @@ double CQuantile::Deviance(const CDataset& kData, const double* kFuncEstimate) {
   return loss / weight;
 }
 
-void CQuantile::FitBestConstant(const CDataset& kData,
+void CQuantile::FitBestConstant(const CDataset& kData, const Bag& kBag,
                                 const double* kFuncEstimate,
                                 unsigned long num_terminalnodes,
-                                double* residuals, CCARTTree& tree) {
+                                std::vector<double>& residuals,
+                                CCARTTree& tree) {
   unsigned long node_num = 0;
   unsigned long obs_num = 0;
   unsigned long vec_num = 0;
-  double offset;
 
   vecd_.resize(
       kData.get_trainsize());  // should already be this size from InitF
@@ -100,9 +107,9 @@ void CQuantile::FitBestConstant(const CDataset& kData,
         tree.min_num_obs_required()) {
       vec_num = 0;
       for (obs_num = 0; obs_num < kData.get_trainsize(); obs_num++) {
-        if (kData.get_bag_element(obs_num) &&
+        if (kBag.get_element(obs_num) &&
             (tree.get_node_assignments()[obs_num] == node_num)) {
-          offset = kData.offset_ptr()[obs_num];
+          const double offset = kData.offset_ptr()[obs_num];
 
           vecd_[vec_num] =
               kData.y_ptr()[obs_num] - offset - kFuncEstimate[obs_num];
@@ -117,19 +124,18 @@ void CQuantile::FitBestConstant(const CDataset& kData,
   }
 }
 
-double CQuantile::BagImprovement(const CDataset& kData,
+double CQuantile::BagImprovement(const CDataset& kData, const Bag& kBag,
                                  const double* kFuncEstimate,
                                  const double kShrinkage,
-                                 const double* kDeltaEstimate) {
+                                 const std::vector<double>& kDeltaEstimate) {
   double returnvalue = 0.0;
-
-  double delta_func_est = 0.0;
   double weight = 0.0;
-  unsigned long i = 0;
 
-  for (i = 0; i < kData.get_trainsize(); i++) {
-    if (!kData.get_bag_element(i)) {
-      delta_func_est = kFuncEstimate[i] + kData.offset_ptr()[i];
+#pragma omp parallel for schedule(static, get_array_chunk_size()) \
+    reduction(+ : returnvalue, weight) num_threads(get_num_threads())
+  for (unsigned long i = 0; i < kData.get_trainsize(); i++) {
+    if (!kBag.get_element(i)) {
+      const double delta_func_est = kFuncEstimate[i] + kData.offset_ptr()[i];
 
       if (kData.y_ptr()[i] > delta_func_est) {
         returnvalue += kData.weight_ptr()[i] * alpha_ *

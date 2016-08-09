@@ -12,49 +12,25 @@
 // Function Members - Public
 //----------------------------------------
 CNode::CNode(const NodeDef& kDefn)
-    : prediction_(kDefn.prediction()),
+    : node_strategy_(new TerminalStrategy(this)),
+      left_node_ptr_(),
+      right_node_ptr_(),
+      missing_node_ptr_(),
+      split_var_(0.0),
+      improvement_(0.0),
+      prediction_(kDefn.prediction()),
       totalweight_(kDefn.get_totalweight()),
       numobs_(kDefn.get_num_obs()),
-      leftcategory_() {
-  splitvalue_ = 0.0;
-  split_var_ = 0;
-  improvement_ = 0.0;
+      leftcategory_(),
+      splitvalue_(0.0),
+      splitdetermined_(false) {}
 
-  // Set children to NULL
-  left_node_ptr_ = NULL;
-  right_node_ptr_ = NULL;
-  missing_node_ptr_ = NULL;
-
-  // Set up split type and strategy
-  splittype_ = kNone;
-  node_strategy_ = new TerminalStrategy(this);
-}
-
-void CNode::SetStrategy() {
-  // delete nodeStrategy;
-  switch (splittype_) {
-    case kNone:
-      node_strategy_ = new TerminalStrategy(this);
-      break;
-    case kContinuous:
-      node_strategy_ = new ContinuousStrategy(this);
-      break;
-    case kCategorical:
-      node_strategy_ = new CategoricalStrategy(this);
-      break;
-    default:
-      throw gbm_exception::Failure("Node State not recognised.");
-      break;
+void CNode::SetStrategy(bool is_continuous_split) {
+  if (is_continuous_split) {
+    node_strategy_.reset(new ContinuousStrategy(this));
+  } else {
+    node_strategy_.reset(new CategoricalStrategy(this));
   }
-}
-
-CNode::~CNode() {
-  // Each node is responsible for deleting its
-  // children and its strategy
-  delete left_node_ptr_;
-  delete right_node_ptr_;
-  delete missing_node_ptr_;
-  delete node_strategy_;
 }
 
 void CNode::Adjust(unsigned long min_num_node_obs) {
@@ -74,33 +50,38 @@ void CNode::PrintSubtree(unsigned long indent) {
   node_strategy_->PrintSubTree(indent);
 }
 
-void CNode::SplitNode(NodeParams& childrenparams) {
+void CNode::SplitNode(const NodeParams& childrenparams) {
   // set up a continuous split
-  if (childrenparams.split_class_ == 0) {
-    splittype_ = kContinuous;
-    SetStrategy();
+  if (childrenparams.split_class() == 0) {
+    SetStrategy(true);
   } else {
-    splittype_ = kCategorical;
-    SetStrategy();
+    SetStrategy(false);
     // the types are confused here
-    leftcategory_.resize(1 + (unsigned long)childrenparams.split_value_);
-    std::copy(childrenparams.category_ordering_.begin(),
-              childrenparams.category_ordering_.begin() + leftcategory_.size(),
+    leftcategory_.resize(1 + (unsigned long)childrenparams.split_value());
+    std::copy(childrenparams.get_ordering().begin(),
+              childrenparams.get_ordering().begin() + leftcategory_.size(),
               leftcategory_.begin());
   }
 
-  split_var_ = childrenparams.split_var_;
-  splitvalue_ = childrenparams.split_value_;
-  improvement_ = childrenparams.improvement_;
+  split_var_ = childrenparams.split_variable();
+  splitvalue_ = childrenparams.split_value();
+  improvement_ = childrenparams.get_improvement();
 
-  left_node_ptr_ = new CNode(childrenparams.left_);
-  right_node_ptr_ = new CNode(childrenparams.right_);
-  missing_node_ptr_ = new CNode(childrenparams.missing_);
+  // Check that our nodes are defined
+  if (!childrenparams.nodes_have_obs()) {
+    throw gbm_exception::Failure("Best split has no observations!");
+  }
+
+  left_node_ptr_.reset(new CNode(childrenparams.get_left_def()));
+  right_node_ptr_.reset(new CNode(childrenparams.get_right_def()));
+  missing_node_ptr_.reset(new CNode(childrenparams.get_missing_def()));
 }
 
 signed char CNode::WhichNode(const CDataset& kData, unsigned long obs_num) {
   return node_strategy_->WhichNode(kData, obs_num);
 }
+
+bool CNode::is_terminal() const { return node_strategy_->is_split(); }
 
 void CNode::TransferTreeToRList(int& node_id, const CDataset& kData,
                                 int* splivar, double* splitvalues,

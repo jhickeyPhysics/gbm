@@ -29,7 +29,8 @@ CTweedie::CTweedie(double power) { power_ = power; }
 //----------------------------------------
 CDistribution* CTweedie::Create(DataDistParams& distparams) {
   // Extract misc from second column of response]
-  double power = Rcpp::as<double>(distparams.misc[0]);
+  Rcpp::List misc_list = Rcpp::as<Rcpp::List>(distparams.misc);
+  double power = Rcpp::as<double>(misc_list[0]);
   if (!gbm_functions::has_value(power)) {
     throw gbm_exception::Failure(
         "Tweedie distribution requires misc to initialization.");
@@ -39,13 +40,14 @@ CDistribution* CTweedie::Create(DataDistParams& distparams) {
 
 CTweedie::~CTweedie() {}
 
-void CTweedie::ComputeWorkingResponse(const CDataset& kData,
+void CTweedie::ComputeWorkingResponse(const CDataset& kData, const Bag& kBag,
                                       const double* kFuncEstimates,
-                                      double* residuals) {
+                                      std::vector<double>& residuals) {
   unsigned long i = 0;
   double delta_func_est = 0.0;
 
-  if (!(kData.y_ptr() && kFuncEstimates && residuals && kData.weight_ptr())) {
+  if (!(kData.y_ptr() && kFuncEstimates &&
+        kData.weight_ptr())) {
     throw gbm_exception::InvalidArgument();
   }
 
@@ -88,7 +90,8 @@ double CTweedie::InitF(const CDataset& kData) {
   return init_func_est;
 }
 
-double CTweedie::Deviance(const CDataset& kData, const double* kFuncEstimate) {
+double CTweedie::Deviance(const CDataset& kData, const Bag& kBag,
+                          const double* kFuncEstimate) {
   double delta_func_est = 0.0;
   unsigned long i = 0;
   double loss = 0.0;
@@ -118,10 +121,11 @@ double CTweedie::Deviance(const CDataset& kData, const double* kFuncEstimate) {
   return 2.0 * loss / weight;
 }
 
-void CTweedie::FitBestConstant(const CDataset& kData,
+void CTweedie::FitBestConstant(const CDataset& kData, const Bag& kBag,
                                const double* kFuncEstimate,
                                unsigned long num_terminalnodes,
-                               double* residuals, CCARTTree& tree) {
+                               std::vector<double>& residuals,
+                               CCARTTree& tree) {
   double delta_func_est = 0.0;
   unsigned long obs_num = 0;
   unsigned long node_num = 0;
@@ -134,7 +138,7 @@ void CTweedie::FitBestConstant(const CDataset& kData,
   vector<double> min_vec(num_terminalnodes, HUGE_VAL);
 
   for (obs_num = 0; obs_num < kData.get_trainsize(); obs_num++) {
-    if (kData.get_bag_element(obs_num)) {
+    if (kBag.get_element(obs_num)) {
       delta_func_est = kFuncEstimate[obs_num] + kData.offset_ptr()[obs_num];
       numerator_vec[tree.get_node_assignments()[obs_num]] +=
           kData.weight_ptr()[obs_num] * kData.y_ptr()[obs_num] *
@@ -152,7 +156,7 @@ void CTweedie::FitBestConstant(const CDataset& kData,
   }
 
   for (node_num = 0; node_num < num_terminalnodes; node_num++) {
-    if (tree.get_terminal_nodes()[node_num] != NULL) {
+    if (tree.has_node(node_num)) {
       if (numerator_vec[node_num] == 0.0) {
         // Taken from poisson.cpp
 
@@ -172,31 +176,33 @@ void CTweedie::FitBestConstant(const CDataset& kData,
             std::log(numerator_vec[node_num] / denominator_vec[node_num]));
       }
 
-      if (max_vec[node_num] + tree.get_terminal_nodes()[node_num]->get_prediction() >
+      if (max_vec[node_num] +
+              tree.get_terminal_nodes()[node_num]->get_prediction() >
           maxval) {
-        tree.get_terminal_nodes()[node_num]->set_prediction(
-            maxval - max_vec[node_num]);
+        tree.get_terminal_nodes()[node_num]->set_prediction(maxval -
+                                                            max_vec[node_num]);
       }
-      if (min_vec[node_num] + tree.get_terminal_nodes()[node_num]->get_prediction() <
+      if (min_vec[node_num] +
+              tree.get_terminal_nodes()[node_num]->get_prediction() <
           minval) {
-        tree.get_terminal_nodes()[node_num]->set_prediction(
-            minval - min_vec[node_num]);
+        tree.get_terminal_nodes()[node_num]->set_prediction(minval -
+                                                            min_vec[node_num]);
       }
     }
   }
 }
 
-double CTweedie::BagImprovement(const CDataset& kData,
+double CTweedie::BagImprovement(const CDataset& kData, const Bag& kBag,
                                 const double* kFuncEstimate,
                                 const double kShrinkage,
-                                const double* kDeltaEstimate) {
+                                const std::vector<double>& kDeltaEstimate) {
   double returnvalue = 0.0;
   double delta_func_estimate = 0.0;
   double weight = 0.0;
   unsigned long i = 0;
 
   for (i = 0; i < kData.get_trainsize(); i++) {
-    if (!kData.get_bag_element(i)) {
+    if (!kBag.get_element(i)) {
       delta_func_estimate = kFuncEstimate[i] + kData.offset_ptr()[i];
 
       returnvalue +=
