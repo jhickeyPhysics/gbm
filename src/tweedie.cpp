@@ -28,9 +28,8 @@ CTweedie::CTweedie(double power) { power_ = power; }
 // Function Members - Public
 //----------------------------------------
 CDistribution* CTweedie::Create(DataDistParams& distparams) {
-  // Extract misc from second column of response]
-  Rcpp::List misc_list = Rcpp::as<Rcpp::List>(distparams.misc);
-  double power = Rcpp::as<double>(misc_list[0]);
+  // Extract misc from second column of response
+  double power = Rcpp::as<double>(distparams.misc[0]);
   if (!gbm_functions::has_value(power)) {
     throw gbm_exception::Failure(
         "Tweedie distribution requires misc to initialization.");
